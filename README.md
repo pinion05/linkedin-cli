@@ -41,3 +41,26 @@ linkedin-cli browser stop
 ## ToS
 
 자동화는 LinkedIn ToS 그레이존 (개인 계정). 저빈도 사용 권장.
+
+
+## 사용 예시
+
+```bash
+$ linkedin-cli status
+{"session_ok": true, "port": 9223}
+
+$ linkedin-cli post --text "Hello from linkedin-cli 🚀"
+{"ok": true, "detail": "published"}
+
+$ linkedin-cli delete --text "Hello from linkedin-cli"
+{"ok": true}
+```
+
+## 설치 (Linux)
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install websockets
+ln -s "$PWD/linkedin_cli.py" ~/.local/bin/linkedin-cli
+linkedin-cli browser start   # xvfb + 격리 Chrome 기동 (최초 1회 수동 로그인으로 시딩)
+```
