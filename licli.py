@@ -89,7 +89,10 @@ class Page:
 
     def __init__(self):
         if not cdp_up():
-            print(json.dumps({"ok": False, "error": "browser down — run: licli browser start"}))
+            # auto-start the isolated browser (detached, survives CLI exit)
+            browser_cmd("start")
+        if not cdp_up():
+            print(json.dumps({"ok": False, "error": "browser failed to start"}))
             sys.exit(2)
         self.ws = None
         self.mid = 0
@@ -157,6 +160,13 @@ class Page:
         await self.cmd("Input.dispatchMouseEvent", {**base, "type": "mouseReleased"})
         time.sleep(0.6)
 
+    async def press_escape(self):
+        for t in ("keyDown", "keyUp"):
+            await self.cmd("Input.dispatchKeyEvent", {
+                "type": t, "key": "Escape", "code": "Escape",
+                "windowsVirtualKeyCode": 27, "nativeVirtualKeyCode": 27})
+        time.sleep(0.4)
+
     async def click_center(self, js_center_expr: str) -> bool:
         """Evaluate JS returning 'x y' center coords, then trusted-click. Empty/None → False."""
         xy = await self.eval_js(js_center_expr)
@@ -176,10 +186,13 @@ FIND_BTN_BY_TEXT = """
     return e.childElementCount===0 && (e.textContent||'').indexOf(needle)>=0;});
   if(!hits.length) return '';
   var n = hits[0];
-  for(var i=0;i<14 && n;i++){
+  for(var i=0;i<16 && n;i++){
+    var h = n.getBoundingClientRect().height;
+    if(h > 900) break;  // climbed past the card into the feed container — bail
     var btn = Array.from(n.querySelectorAll('button')).find(function(b){
       return /관리 메뉴/.test(b.getAttribute('aria-label')||'');});
-    if(btn){var r=btn.getBoundingClientRect(); return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2);}
+    if(btn){var r=btn.getBoundingClientRect();
+      if(r.width>0) return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2);}
     n = n.parentElement;
   }
   return '';
@@ -189,7 +202,7 @@ FIND_BTN_BY_TEXT = """
 MENU_DELETE_ITEM = """
 (function(){
   var items = Array.from(document.querySelectorAll('[role=menuitem],[role=menu] button,li button')).filter(function(e){
-    return /^삭제$|게시물 삭제|Delete post/.test((e.innerText||'').trim());});
+    return /^삭제$|글 삭제|게시물 삭제|Delete post/.test((e.innerText||'').trim());});
   if(!items.length) return '';
   var r = items[0].getBoundingClientRect();
   return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2);
@@ -223,11 +236,18 @@ PUBLISH_BUTTON = """
 """
 
 
+async def get_cookie(pg: Page, name: str) -> str:
+    res = await pg.cmd("Network.getCookies", {"urls": ["https://www.linkedin.com"]})
+    for c in res.get("cookies", []):
+        if c["name"] == name:
+            return c["value"]
+    return ""
+
+
 async def session_ok(pg: Page) -> bool:
-    st = await pg.eval_js(
-        "fetch('/voyager/api/me',{credentials:'include'}).then(r=>r.status).catch(()=>'ERR')",
-        await_promise=True)
-    return st == 200
+    """Login verdict = auth cookie exists (li_at). In-page fetch without app
+    headers gets 403 regardless of session, so don't probe the API here."""
+    return bool(await get_cookie(pg, "li_at"))
 
 
 async def ensure_session(pg: Page, timeout=60) -> bool:
@@ -253,24 +273,21 @@ async def cmd_me(pg: Page):
     if not await ensure_session(pg):
         print(json.dumps({"ok": False, "error": "no session"}))
         sys.exit(3)
-    data = await pg.eval_js(
-        "fetch('/voyager/api/me',{credentials:'include'}).then(r=>r.json()).catch(()=>null)",
-        await_promise=True)
-    if not data:
-        print(json.dumps({"ok": False}))
-        sys.exit(3)
-    d = data.get("data", {})
-    inc = data.get("included", [{}])
-    mini = next((x for x in inc if x.get("$type", "").endswith("MiniProfile")), {})
-    print(json.dumps({
-        "ok": True,
-        "plainId": d.get("plainId"),
-        "firstName": mini.get("firstName"),
-        "lastName": mini.get("lastName"),
-        "occupation": mini.get("occupation"),
-        "publicIdentifier": mini.get("publicIdentifier"),
-        "memberUrn": mini.get("objectUrn"),
-    }, ensure_ascii=False))
+    url = await pg.eval_js("location.href") or ""
+    if "linkedin.com" not in url:
+        await pg.goto("https://www.linkedin.com/", settle=4)
+    info = await pg.eval_js("""
+      (function(){
+        var a = document.querySelector('a[href*="/in/"]');
+        if(!a) return '';
+        var href = a.getAttribute('href').split('?')[0];
+        var lines = (a.innerText||'').split('\\n').map(function(s){return s.trim();}).filter(Boolean);
+        return JSON.stringify({profileUrl: href, name: lines[0]||'', headline: lines[1]||''});
+      })()
+    """)
+    d = json.loads(info) if info else {}
+    d.update({"ok": True, "session": True})
+    print(json.dumps(d, ensure_ascii=False))
 
 
 async def cmd_post(pg: Page, text: str):
@@ -315,24 +332,51 @@ async def cmd_post(pg: Page, text: str):
     sys.exit(0 if posted else 5)
 
 
+async def wait_clickable(pg: Page, js_expr: str, tries=8, delay=0.6) -> str:
+    """Poll a JS expr returning 'x y' coords until non-empty; returns coords or ''."""
+    for _ in range(tries):
+        xy = await pg.eval_js(js_expr)
+        if xy and " " in str(xy):
+            return str(xy)
+        time.sleep(delay)
+    return ""
+
+
 async def cmd_delete(pg: Page, text: str):
     if not await ensure_session(pg):
         print(json.dumps({"ok": False, "error": "no session"}))
         sys.exit(3)
     await pg.goto(ACTIVITY_URL, settle=5)
-
-    # options menu of the post containing `text`
     needle = json.dumps(text, ensure_ascii=False)
-    if not await pg.click_center(FIND_BTN_BY_TEXT % needle):
-        print(json.dumps({"ok": False, "error": "post/options not found"}))
-        sys.exit(4)
-    time.sleep(1.0)
-    if not await pg.click_center(MENU_DELETE_ITEM):
-        print(json.dumps({"ok": False, "error": "delete menu item not found"}))
-        sys.exit(4)
-    time.sleep(1.5)
-    if not await pg.click_center(CONFIRM_DELETE):
-        print(json.dumps({"ok": False, "error": "confirm dialog not found"}))
+
+    err = "unknown"
+    for attempt in range(3):
+        await pg.press_escape()  # dismiss stray video/modal overlays
+        xy = await wait_clickable(pg, FIND_BTN_BY_TEXT % needle, tries=4)
+        if not xy:
+            err = "post/options not found"
+            continue
+        x, y = xy.split(" ")
+        await pg.click(float(x), float(y))
+
+        xy = await wait_clickable(pg, MENU_DELETE_ITEM, tries=4)
+        if not xy:
+            err = "delete menu item not found"
+            continue
+        x, y = xy.split(" ")
+        await pg.click(float(x), float(y))
+
+        xy = await wait_clickable(pg, CONFIRM_DELETE, tries=4)
+        if not xy:
+            err = "confirm dialog not found"
+            continue
+        x, y = xy.split(" ")
+        await pg.click(float(x), float(y))
+        err = None
+        break
+
+    if err:
+        print(json.dumps({"ok": False, "error": err}))
         sys.exit(4)
 
     deadline = time.time() + 20
