@@ -60,7 +60,7 @@ async def detect_and_cache_vanity(pg):
     href = await pg.eval_js(
         "(function(){var a=Array.from(document.querySelectorAll('a[href*=\"/in/\"]')).filter(function(x){"
         "var t=(x.innerText||'').trim();var h=x.getAttribute('href');"
-        "return t.length>1 && t.indexOf(String.fromCharCode(10))>0 && /^\\/in\\/[^\\/]+\\/?$/.test(h) && x.getBoundingClientRect().width>0;})[0];"
+        "return t.length>1 && t.indexOf(String.fromCharCode(10))>0 && h.indexOf('/in/')===0 && h.split('/').length<=4 && x.getBoundingClientRect().width>0;})[0];"
         "return a?a.getAttribute('href').split('?')[0]:'';})()")
     if href and "/in/" in href:
         vanity = href.rstrip("/").split("/in/")[-1]
@@ -311,14 +311,16 @@ async def cmd_me(pg: Page):
         print(json.dumps({"ok": False, "error": "no session"}))
         sys.exit(3)
     url = await pg.eval_js("location.href") or ""
-    if "linkedin.com" not in url:
-        await pg.goto("https://www.linkedin.com/", settle=4)
+    if "linkedin.com/feed" not in url:
+        await pg.goto("https://www.linkedin.com/feed/", settle=4)
     info = await pg.eval_js("""
       (function(){
         var a = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(function(x){
           var t=(x.innerText||'').trim();
           var href=x.getAttribute('href');
-          return t.length>1 && t.indexOf(String.fromCharCode(10))>0 && /^\/in\/[^\/]+\/?$/.test(href) && x.getBoundingClientRect().width>0;})[0];
+          return t.length>1 && t.indexOf(String.fromCharCode(10))>0
+            && href.indexOf('/in/')===0 && href.split('/').length<=4
+            && x.getBoundingClientRect().width>0;})[0];
         if(!a) return '';
         var href = a.getAttribute('href').split('?')[0];
         var lines = (a.innerText||'').split('\\n').map(function(s){return s.trim();}).filter(Boolean);
