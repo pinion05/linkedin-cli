@@ -278,7 +278,8 @@ async def cmd_me(pg: Page):
         await pg.goto("https://www.linkedin.com/", settle=4)
     info = await pg.eval_js("""
       (function(){
-        var a = document.querySelector('a[href*="/in/"]');
+        var a = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(function(x){
+          return (x.innerText||'').trim().length>1 && x.getBoundingClientRect().width>0;})[0];
         if(!a) return '';
         var href = a.getAttribute('href').split('?')[0];
         var lines = (a.innerText||'').split('\\n').map(function(s){return s.trim();}).filter(Boolean);
