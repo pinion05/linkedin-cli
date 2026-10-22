@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-licli — LinkedIn posting CLI via an isolated real-browser client (CDP).
+linkedin-cli — LinkedIn posting CLI via an isolated real-browser client (CDP).
+
+Command: linkedin-cli (short alias: licli)
 
 Design (B-plan, validated 2026-10-22):
-  - Owns a dedicated Chrome instance (profile ~/.local/share/licli/chrome-profile,
+  - Owns a dedicated Chrome instance (profile ~/.local/share/linkedin-cli/chrome-profile,
     port 9223) running under xvfb — never touches the user's interactive browser.
   - All LinkedIn traffic is issued BY REAL CHROME (UI automation), so the
     session survives (external API clients get li_at invalidated after 1 call
@@ -11,11 +13,11 @@ Design (B-plan, validated 2026-10-22):
   - Session auto-revive: LinkedIn + Google One Tap restores login on visit.
 
 Commands:
-  licli browser start|stop|status   manage the isolated browser
-  licli status                      session check (+ auto-revive)
-  licli me                          print profile JSON
-  licli post --text "..."           publish a post
-  licli delete --text "..."         delete own post matching text
+  linkedin-cli browser start|stop|status   manage the isolated browser
+  linkedin-cli status                      session check (+ auto-revive)
+  linkedin-cli me                          print profile info
+  linkedin-cli post --text "..."           publish a post
+  linkedin-cli delete --text "..."         delete own post matching text
 """
 import argparse
 import json
@@ -27,13 +29,48 @@ import urllib.request
 
 import websockets
 
-HOME = os.path.expanduser("~/.local/share/licli")
+HOME = os.environ.get("LINKEDIN_CLI_HOME",
+                      os.path.expanduser("~/.local/share/linkedin-cli"))
+# legacy licli data dir keeps the seeded browser profile/session
+if os.path.isdir(os.path.expanduser("~/.local/share/licli/chrome-profile")):
+    HOME = os.path.expanduser("~/.local/share/licli")
 PROFILE = os.path.join(HOME, "chrome-profile")
 PORT = int(os.environ.get("LICLI_PORT", "9223"))
-USER_AGENT_LAUNCH = ["google-chrome"]
 
 COMPOSE_URL = "https://www.linkedin.com/sharing/compose"
-ACTIVITY_URL = "https://www.linkedin.com/in/%EB%AA%85%EC%B2%A0-%EB%B0%95-6a886928a/recent-activity/all/"
+
+
+def activity_url(pg=None) -> str:
+    """Own recent-activity URL: env override, cached vanity, else /feed/ (auto-detect helper below)."""
+    env = os.environ.get("LINKEDIN_CLI_ACTIVITY_URL")
+    if env:
+        return env
+    cache = os.path.join(HOME, "config.json")
+    try:
+        cfg = json.load(open(cache))
+        if cfg.get("vanity"):
+            return f"https://www.linkedin.com/in/{cfg['vanity']}/recent-activity/all/"
+    except Exception:
+        pass
+    return "https://www.linkedin.com/feed/"
+
+
+async def detect_and_cache_vanity(pg):
+    """Find own /in/<vanity> link on any LinkedIn page and cache it."""
+    href = await pg.eval_js(
+        "(function(){var a=Array.from(document.querySelectorAll('a[href*=\"/in/\"]')).filter(function(x){"
+        "var t=(x.innerText||'').trim();var h=x.getAttribute('href');"
+        "return t.length>1 && t.indexOf(String.fromCharCode(10))>0 && /^\\/in\\/[^\\/]+\\/?$/.test(h) && x.getBoundingClientRect().width>0;})[0];"
+        "return a?a.getAttribute('href').split('?')[0]:'';})()")
+    if href and "/in/" in href:
+        vanity = href.rstrip("/").split("/in/")[-1]
+        try:
+            os.makedirs(HOME, exist_ok=True)
+            json.dump({"vanity": vanity}, open(os.path.join(HOME, "config.json"), "w"))
+        except Exception:
+            pass
+        return vanity
+    return ""
 
 
 # ---------------------------------------------------------------- browser life
@@ -279,7 +316,9 @@ async def cmd_me(pg: Page):
     info = await pg.eval_js("""
       (function(){
         var a = Array.from(document.querySelectorAll('a[href*="/in/"]')).filter(function(x){
-          return (x.innerText||'').trim().length>1 && x.getBoundingClientRect().width>0;})[0];
+          var t=(x.innerText||'').trim();
+          var href=x.getAttribute('href');
+          return t.length>1 && t.indexOf(String.fromCharCode(10))>0 && /^\/in\/[^\/]+\/?$/.test(href) && x.getBoundingClientRect().width>0;})[0];
         if(!a) return '';
         var href = a.getAttribute('href').split('?')[0];
         var lines = (a.innerText||'').split('\\n').map(function(s){return s.trim();}).filter(Boolean);
@@ -347,7 +386,12 @@ async def cmd_delete(pg: Page, text: str):
     if not await ensure_session(pg):
         print(json.dumps({"ok": False, "error": "no session"}))
         sys.exit(3)
-    await pg.goto(ACTIVITY_URL, settle=5)
+    url = await pg.eval_js("location.href") or ""
+    if "linkedin.com" not in url:
+        await pg.goto("https://www.linkedin.com/", settle=4)
+    if activity_url(pg).endswith("/feed/"):  # no cached vanity yet → detect
+        await detect_and_cache_vanity(pg)
+    await pg.goto(activity_url(pg), settle=5)
     needle = json.dumps(text, ensure_ascii=False)
 
     err = "unknown"

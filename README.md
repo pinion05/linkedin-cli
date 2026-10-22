@@ -1,4 +1,4 @@
-# licli
+# linkedin-cli
 
 LinkedIn 포스팅 CLI — **격리된 실제 Chrome을 HTTP 클라이언트로 쓰는** B-안 설계.
 
@@ -12,19 +12,19 @@ LinkedIn 포스팅 CLI — **격리된 실제 Chrome을 HTTP 클라이언트로 
 ## 사용
 
 ```bash
-licli browser start        # 격리 크롬 기동 (xvfb, 포트 9223, ~/.local/share/licli/chrome-profile)
-licli status               # 세션 확인 (li_at 존재 판정; 죽으면 linkedin.com 방문으로 원탭 자동복구)
-licli me                   # 프로필 요약
-licli post --text "글"      # 게시 (compose → insertText → 게시물 버튼 → 검증)
-licli delete --text "글"    # 내 포스트 텍스트 매칭 → 옵션메뉴 → 글 삭제 → 확인
-licli browser stop
+linkedin-cli browser start        # 격리 크롬 기동 (xvfb, 포트 9223, ~/.local/share/licli/chrome-profile)
+linkedin-cli status               # 세션 확인 (li_at 존재 판정; 죽으면 linkedin.com 방문으로 원탭 자동복구)
+linkedin-cli me                   # 프로필 요약
+linkedin-cli post --text "글"      # 게시 (compose → insertText → 게시물 버튼 → 검증)
+linkedin-cli delete --text "글"    # 내 포스트 텍스트 매칭 → 옵션메뉴 → 글 삭제 → 확인
+linkedin-cli browser stop
 ```
 
 브라우저가 꺼져 있으면 모든 커맨드가 자동으로 재기동한다 (detach 실행이라 CLI 종료와 무관하게 생존).
 
 ## 구조
 
-- 단일 파일 `licli.py` — Python 3 + `websockets`만 의존 (agent-browser 불필요)
+- 단일 파일 `linkedin_cli.py` — Python 3 + `websockets`만 의존 (agent-browser 불필요)
 - 원시 CDP: `Runtime.evaluate`(좌표획득/검증), `Input.dispatchMouseEvent`(신뢰 클릭 — React 합성 이벤트 무시 우회), `Input.insertText`(ProseMirror 입력), `Network.getCookies`(li_at 판정 — httpOnly 포함)
 - 사용 중인 브라우저(9222)와 완전 분리 — 사람이 쓰는 탭을 절대 건드리지 않음
 - 프로필은 hermes-clone 복사본에서 시딩됨 (Google 세션 포함 → 원탭 자동복구)
