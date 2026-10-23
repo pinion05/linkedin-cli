@@ -224,6 +224,7 @@ FIND_BTN_BY_TEXT = """
     var n = btns[i];
     for (var j=0;j<8 && n;j++){
       if ((n.innerText||'').indexOf(needle)>=0){
+        btns[i].scrollIntoView({block:'center'});
         var r = btns[i].getBoundingClientRect();
         if (r.width>0) return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2);
         return '';
@@ -338,22 +339,34 @@ async def cmd_post(pg: Page, text: str):
         sys.exit(3)
     await pg.goto(COMPOSE_URL, settle=4)
 
-    editor = '.tiptap.ProseMirror[contenteditable=true]'
-    ok = await pg.click_center(
-        f"(function(){{var e=document.querySelector('{editor}');if(!e)return '';"
-        f"var r=e.getBoundingClientRect();return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2);}})()")
-    if not ok:
+    # 2026-10-23: 신뢰 마우스 클릭으로는 에디터 포커스/메뉴 오픈이 안 되게 바뀜(실측)
+    # → JS focus() + Input.insertText + 합성 click() 사용
+    focused = await pg.eval_js(
+        "(function(){var e=document.querySelector('.tiptap.ProseMirror[contenteditable=true]');"
+        "if(!e)return false;e.focus();return document.activeElement===e;})()")
+    ok_editor = False
+    for _ in range(10):
+        if focused:
+            ok_editor = True
+            break
+        time.sleep(1.0)
+        focused = await pg.eval_js(
+            "(function(){var e=document.querySelector('.tiptap.ProseMirror[contenteditable=true]');"
+            "if(!e)return false;e.focus();return document.activeElement===e;})()")
+    if not ok_editor:
         print(json.dumps({"ok": False, "error": "composer editor not found"}))
         sys.exit(4)
     await pg.cmd("Input.insertText", {"text": text})
-    time.sleep(1.2)
+    time.sleep(1.5)
 
-    btn = await pg.eval_js(PUBLISH_BUTTON)
-    if not btn:
+    clicked = await pg.eval_js(
+        "(function(){var bs=Array.from(document.querySelectorAll('button')).filter(function(x){"
+        "return x.innerText.trim()==='게시물'&&x.getBoundingClientRect().width>0&&!x.disabled;});"
+        "if(!bs.length)return '';bs.sort(function(a,b){var ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();"
+        "return (rb.y+rb.x)-(ra.y+ra.x);});bs[0].click();return 'CLICKED';})()")
+    if clicked != "CLICKED":
         print(json.dumps({"ok": False, "error": "publish button not found"}))
         sys.exit(4)
-    x, y = btn.split(" ")
-    await pg.click(float(x), float(y))
 
     # verify: our text appears outside the composer (feed/toast), editor gone or cleared
     deadline = time.time() + 25
@@ -361,7 +374,7 @@ async def cmd_post(pg: Page, text: str):
     while time.time() < deadline:
         time.sleep(3)
         state = await pg.eval_js(
-            "(function(){var e=document.querySelector('" + editor + "');"
+            "(function(){var e=document.querySelector('.tiptap.ProseMirror[contenteditable=true]');"
             "var gone=!e||!e.innerText.trim();"
             "var toast=/게시되었습니다|게시했습니다/.test(document.body.innerText);"
             "var onFeed=document.body.innerText.indexOf(" + json.dumps(text[:20], ensure_ascii=False) + ")>=0;"
@@ -391,34 +404,78 @@ async def cmd_delete(pg: Page, text: str):
     url = await pg.eval_js("location.href") or ""
     if "linkedin.com" not in url:
         await pg.goto("https://www.linkedin.com/", settle=4)
-    if activity_url(pg).endswith("/feed/"):  # no cached vanity yet → detect
+    if not activity_url(pg).startswith("https://www.linkedin.com/in/"):
         await detect_and_cache_vanity(pg)
     await pg.goto(activity_url(pg), settle=5)
     needle = json.dumps(text, ensure_ascii=False)
 
+    # 2026-10-23: 옵션 메뉴는 신뢰 마우스 입력으로 열리지 않게 바뀜(실측) → 합성 click() 사용
+    CLICK_OPTS = """
+    (function(){
+      var needle = %s;
+      var btns = Array.from(document.querySelectorAll('button[aria-label*="관리 메뉴"]'));
+      for (var i=0;i<btns.length;i++){
+        var n = btns[i];
+        for (var j=0;j<8 && n;j++){
+          if ((n.innerText||'').indexOf(needle)>=0){
+            if (btns[i].getBoundingClientRect().width>0){ btns[i].click(); return 'CLICKED'; }
+            return '';
+          }
+          if (n.getBoundingClientRect().height > 900) break;
+          n = n.parentElement;
+        }
+      }
+      return '';
+    })()
+    """ % needle
+
+    CLICK_MENU_DELETE = """
+    (function(){
+      var items = Array.from(document.querySelectorAll('[role=menuitem],[role=menu] button,li button')).filter(function(e){
+        return /^삭제$|글 삭제|게시물 삭제|Delete post/.test((e.innerText||'').trim());});
+      if(!items.length) return '';
+      items[0].click();
+      return 'CLICKED';
+    })()
+    """
+
+    CLICK_CONFIRM = """
+    (function(){
+      var btns = Array.from(document.querySelectorAll('button')).filter(function(b){
+        return (b.innerText||'').trim()==='삭제' && b.getBoundingClientRect().width>0;});
+      if(!btns.length) return '';
+      btns.sort(function(a,b){
+        var ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect();
+        return (rb.y+rb.x)-(ra.y+ra.x);});
+      btns[0].click();
+      return 'CLICKED';
+    })()
+    """
+
     err = "unknown"
     for attempt in range(3):
         await pg.press_escape()  # dismiss stray video/modal overlays
-        xy = await wait_clickable(pg, FIND_BTN_BY_TEXT % needle, tries=4)
-        if not xy:
+        r = await pg.eval_js(CLICK_OPTS)
+        if r != "CLICKED":
             err = "post/options not found"
             continue
-        x, y = xy.split(" ")
-        await pg.click(float(x), float(y))
-
-        xy = await wait_clickable(pg, MENU_DELETE_ITEM, tries=4)
-        if not xy:
+        time.sleep(1.2)
+        r = await pg.eval_js(CLICK_MENU_DELETE)
+        if r != "CLICKED":
             err = "delete menu item not found"
             continue
-        x, y = xy.split(" ")
-        await pg.click(float(x), float(y))
+        time.sleep(1.5)
 
-        xy = await wait_clickable(pg, CONFIRM_DELETE, tries=4)
-        if not xy:
+        confirmed = False
+        for _ in range(8):
+            r = await pg.eval_js(CLICK_CONFIRM)
+            if r == "CLICKED":
+                confirmed = True
+                break
+            time.sleep(0.6)
+        if not confirmed:
             err = "confirm dialog not found"
             continue
-        x, y = xy.split(" ")
-        await pg.click(float(x), float(y))
         err = None
         break
 

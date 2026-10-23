@@ -42,7 +42,8 @@ const FIND_BTN_BY_TEXT = (needle: string) => `
     var n = btns[i];
     for (var j=0;j<8 && n;j++){
       if ((n.innerText||'').indexOf(needle)>=0){
-        var r = btns[i].getBoundingClientRect();
+        btns[i].scrollIntoView({block:'center'});
+        const r = btns[i].getBoundingClientRect();
         if (r.width>0) return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2);
         return '';
       }
@@ -361,24 +362,35 @@ async function cmdPost(pg: Page, text: string): Promise<void> {
   await requireSession(pg);
   await pg.goto(COMPOSE_URL, 4);
 
-  const editorCenter = `(function(){var e=document.querySelector('${EDITOR_SEL}');if(!e)return '';var r=e.getBoundingClientRect();return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2);})()`;
-  const ed = await waitClickable(pg, editorCenter, 10, 800);
-  if (!ed) {
+  // 2026-10-23: trusted mouse clicks no longer focus the editor / open menus
+  // (measured) → JS focus() + Input.insertText + synthetic click()
+  const FOCUS_EDITOR = `
+    (function(){var e=document.querySelector('${EDITOR_SEL}');
+    if(!e)return false;e.focus();return document.activeElement===e;})()`;
+  let focused = false;
+  for (let i = 0; i < 10; i++) {
+    focused = Boolean(await pg.evalJs(FOCUS_EDITOR));
+    if (focused) break;
+    await sleep(1000);
+  }
+  if (!focused) {
     console.log(JSON.stringify({ ok: false, error: "composer editor not found" }));
     process.exit(4);
   }
-  const [ex, ey] = ed.split(" ");
-  await pg.click(parseFloat(ex), parseFloat(ey));
   await pg.insertText(text);
-  await sleep(1200);
+  await sleep(1500);
 
-  const btn: string = (await pg.evalJs(PUBLISH_BUTTON)) || "";
-  if (!btn) {
+  const clicked: string = (await pg.evalJs(`
+    (function(){var bs=Array.from(document.querySelectorAll('button')).filter(function(x){
+      return x.innerText.trim()==='게시물' && x.getBoundingClientRect().width>0 && !x.disabled;});
+    if(!bs.length)return '';
+    bs.sort(function(a,b){var ra=a.getBoundingClientRect(),rb=b.getBoundingClientRect();
+      return (rb.y+rb.x)-(ra.y+ra.x);});
+    bs[0].click();return 'CLICKED';})()`)) || "";
+  if (clicked !== "CLICKED") {
     console.log(JSON.stringify({ ok: false, error: "publish button not found" }));
     process.exit(4);
   }
-  const [x, y] = btn.split(" ");
-  await pg.click(parseFloat(x), parseFloat(y));
 
   const deadline = Date.now() + 25000;
   let state: any = {};
@@ -412,26 +424,66 @@ async function cmdDelete(pg: Page, text: string): Promise<void> {
   await requireSession(pg);
   const url: string = (await pg.evalJs("location.href")) || "";
   if (!url.includes("linkedin.com")) await pg.goto("https://www.linkedin.com/", 4);
-  if (!cachedVanity()) await detectAndCacheVanity(pg);
+  if (!(await activityUrl(pg)).startsWith("https://www.linkedin.com/in/")) await detectAndCacheVanity(pg);
   await pg.goto(await activityUrl(pg), 5);
+
+  // 2026-10-23: 옵션 메뉴는 신뢰 마우스 입력으로 열리지 않게 바뀜(실측) → 합성 click() 사용
+  const CLICK_OPTS = `
+  (function(){
+    var needle = ${JSON.stringify(text)};
+    var btns = Array.from(document.querySelectorAll('button[aria-label*="관리 메뉴"]'));
+    for (var i=0;i<btns.length;i++){
+      var n = btns[i];
+      for (var j=0;j<8 && n;j++){
+        if ((n.innerText||'').indexOf(needle)>=0){
+          if (btns[i].getBoundingClientRect().width>0){ btns[i].click(); return 'CLICKED'; }
+          return '';
+        }
+        if (n.getBoundingClientRect().height > 900) break;
+        n = n.parentElement;
+      }
+    }
+    return '';
+  })()`;
+
+  const CLICK_MENU_DELETE = `
+  (function(){
+    var items = Array.from(document.querySelectorAll('[role=menuitem],[role=menu] button,li button')).filter(function(e){
+      return /^삭제$|글 삭제|게시물 삭제|Delete post/.test((e.innerText||'').trim());});
+    if(!items.length) return '';
+    items[0].click();
+    return 'CLICKED';
+  })()`;
+
+  const CLICK_CONFIRM = `
+  (function(){
+    var btns = Array.from(document.querySelectorAll('button')).filter(function(b){
+      return (b.innerText||'').trim()==='삭제' && b.getBoundingClientRect().width>0;});
+    if(!btns.length) return '';
+    btns.sort(function(a,b){
+      var ra=a.getBoundingClientRect(), rb=b.getBoundingClientRect();
+      return (rb.y+rb.x)-(ra.y+ra.x);});
+    btns[0].click();
+    return 'CLICKED';
+  })()`;
 
   let err = "unknown";
   for (let attempt = 0; attempt < 3; attempt++) {
     await pg.pressEscape(); // dismiss stray video/modal overlays
-    let xy = await waitClickable(pg, FIND_BTN_BY_TEXT(text), 4);
-    if (!xy) { err = "post/options not found"; continue; }
-    let [x, y] = xy.split(" ");
-    await pg.click(parseFloat(x), parseFloat(y));
+    let r = await pg.evalJs(CLICK_OPTS);
+    if (r !== "CLICKED") { err = "post/options not found"; continue; }
+    await sleep(1200);
+    r = await pg.evalJs(CLICK_MENU_DELETE);
+    if (r !== "CLICKED") { err = "delete menu item not found"; continue; }
+    await sleep(1500);
 
-    xy = await waitClickable(pg, MENU_DELETE_ITEM, 4);
-    if (!xy) { err = "delete menu item not found"; continue; }
-    [x, y] = xy.split(" ");
-    await pg.click(parseFloat(x), parseFloat(y));
-
-    xy = await waitClickable(pg, CONFIRM_DELETE, 4);
-    if (!xy) { err = "confirm dialog not found"; continue; }
-    [x, y] = xy.split(" ");
-    await pg.click(parseFloat(x), parseFloat(y));
+    let confirmed = false;
+    for (let i = 0; i < 8; i++) {
+      r = await pg.evalJs(CLICK_CONFIRM);
+      if (r === "CLICKED") { confirmed = true; break; }
+      await sleep(600);
+    }
+    if (!confirmed) { err = "confirm dialog not found"; continue; }
     err = "";
     break;
   }
