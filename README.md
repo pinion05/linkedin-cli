@@ -41,3 +41,14 @@ linkedin-cli browser stop
 ## ToS
 
 자동화는 LinkedIn ToS 그레이존 (개인 계정). 저빈도 사용 권장.
+
+
+## 설치 (npm)
+
+```bash
+npm install -g licli        # 명령어: licli / linkedin-cli
+```
+
+(로컬 개발: `npm install && npm run build` 후 `node dist/index.js ...`)
+
+**요구사항**: Linux + Chrome + xvfb (`sudo apt install xvfb`) + 로그인된 Chrome 프로필 1회 시딩 (아래 참고).

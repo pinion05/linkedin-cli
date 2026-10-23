@@ -1,0 +1,28 @@
+{
+  "name": "licli",
+  "version": "0.1.0",
+  "description": "LinkedIn posting CLI via an isolated real-browser CDP client — sessions survive (auto-relogin), agent-friendly JSON output",
+  "bin": {
+    "licli": "./dist/index.js",
+    "linkedin-cli": "./dist/index.js"
+  },
+  "files": ["dist"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pinion05/linkedin-cli.git"
+  },
+  "bugs": {"url": "https://github.com/pinion05/linkedin-cli/issues"},
+  "homepage": "https://github.com/pinion05/linkedin-cli#readme",
+  "license": "MIT",
+  "keywords": ["linkedin", "cli", "cdp", "automation", "agent", "posting"],
+  "engines": {"node": ">=18"},
+  "dependencies": {"ws": "^8.18.0"},
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  }
+}
