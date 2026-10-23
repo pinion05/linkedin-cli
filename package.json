@@ -1,6 +1,6 @@
 {
   "name": "@npmc_5/licli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "LinkedIn posting CLI via an isolated real-browser CDP client — sessions survive (auto-relogin), agent-friendly JSON output",
   "bin": {
     "licli": "./dist/index.js",
