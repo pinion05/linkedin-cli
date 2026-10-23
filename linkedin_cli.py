@@ -219,18 +219,18 @@ class Page:
 FIND_BTN_BY_TEXT = """
 (function(){
   var needle = %s;
-  var hits = Array.from(document.querySelectorAll('div,span')).filter(function(e){
-    return e.childElementCount===0 && (e.textContent||'').indexOf(needle)>=0;});
-  if(!hits.length) return '';
-  var n = hits[0];
-  for(var i=0;i<16 && n;i++){
-    var h = n.getBoundingClientRect().height;
-    if(h > 900) break;  // climbed past the card into the feed container — bail
-    var btn = Array.from(n.querySelectorAll('button')).find(function(b){
-      return /관리 메뉴/.test(b.getAttribute('aria-label')||'');});
-    if(btn){var r=btn.getBoundingClientRect();
-      if(r.width>0) return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2);}
-    n = n.parentElement;
+  var btns = Array.from(document.querySelectorAll('button[aria-label*="관리 메뉴"]'));
+  for (var i=0;i<btns.length;i++){
+    var n = btns[i];
+    for (var j=0;j<8 && n;j++){
+      if ((n.innerText||'').indexOf(needle)>=0){
+        var r = btns[i].getBoundingClientRect();
+        if (r.width>0) return Math.round(r.x+r.width/2)+' '+Math.round(r.y+r.height/2);
+        return '';
+      }
+      if (n.getBoundingClientRect().height > 900) break;
+      n = n.parentElement;
+    }
   }
   return '';
 })()
