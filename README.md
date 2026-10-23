@@ -24,7 +24,8 @@ linkedin-cli browser stop
 
 ## 구조
 
-- 단일 파일 `linkedin_cli.py` — Python 3 + `websockets`만 의존 (agent-browser 불필요)
+- TypeScript 단일 파일 `src/index.ts` → `dist/index.js` (의존: `ws`만, agent-browser 불필요) — npm 배포: `@npmc_5/licli`
+- `linkedin_cli.py` — 최초 검증용 Python 원본 구현 (참고 유지)
 - 원시 CDP: `Runtime.evaluate`(좌표획득/검증), `Input.dispatchMouseEvent`(신뢰 클릭 — React 합성 이벤트 무시 우회), `Input.insertText`(ProseMirror 입력), `Network.getCookies`(li_at 판정 — httpOnly 포함)
 - 사용 중인 브라우저(9222)와 완전 분리 — 사람이 쓰는 탭을 절대 건드리지 않음
 - 프로필은 hermes-clone 복사본에서 시딩됨 (Google 세션 포함 → 원탭 자동복구)
