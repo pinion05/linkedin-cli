@@ -46,7 +46,7 @@ linkedin-cli browser stop
 ## 설치 (npm)
 
 ```bash
-npm install -g licli        # 명령어: licli / linkedin-cli
+npm install -g @npmc_5/licli        # 명령어: licli / linkedin-cli
 ```
 
 (로컬 개발: `npm install && npm run build` 후 `node dist/index.js ...`)
